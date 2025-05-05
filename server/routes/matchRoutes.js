@@ -1,13 +1,10 @@
-import express from 'express';
-import pool from '../config/db.js';
-import { auth, adminOnly } from '../middleware/auth.js';
-import { sendMatchReminder } from '../lib/email.js';
-
+const express = require('express')
+const pool= require('../config/db');    // adjust as needed
+const { auth, adminOnly } = require('../middleware/auth');
+const { sendMatchReminder } = require('../lib/email');
 const router = express.Router();
 
-// @route   GET /api/matches
-// @desc    Get all matches (with filters)
-// @access  Public
+
 router.get('/', async (req, res) => {
   try {
     let query = `
@@ -383,4 +380,4 @@ router.post('/:id/reminder', auth, adminOnly, async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;

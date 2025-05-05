@@ -1,12 +1,9 @@
-import express from 'express';
-import pool from '../config/db.js';
-import { auth, adminOnly } from '../middleware/auth.js';
+const express = require('express');
+const pool = require('../config/db');
+const { auth, adminOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
-// @route   GET /api/players
-// @desc    Get all players (with filters)
-// @access  Public
 router.get('/', async (req, res) => {
   try {
     let query = `
@@ -267,4 +264,4 @@ router.delete('/:id', auth, adminOnly, async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;

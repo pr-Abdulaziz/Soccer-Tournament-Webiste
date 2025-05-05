@@ -1,10 +1,23 @@
-const mysql = require("mysql");
-require('dotenv').config();   // loads .env automatically
+const mysql  = require('mysql2/promise');
+const dotenv = require('dotenv');
+dotenv.config();
 
-
-export const db = mysql.createConnection({
+const pool = mysql.createPool({
   host:     process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  username: process.env.DB_USER,
+  user:     process.env.DB_USER,
   password: process.env.DB_PASS,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
 });
+
+async function initDB() {
+  try {
+    await pool.getConnection();
+    console.log('✅  MySQL connected');
+  } catch (err) {
+    console.error('❌  DB connection failed:', err);
+    process.exit(1);
+  }
+}
+
+module.exports = { pool, initDB };

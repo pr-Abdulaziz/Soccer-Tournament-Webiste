@@ -1,16 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const path = require('path');
 const { fileURLToPath } = require('url');
+const cookieParser = require("cookie-parser");
 
 // Routes
-const authRoutes = require('./routes/auth');
-const tournamentRoutes = require('./routes/tournament');
-const teamRoutes = require('./routes/team');
-const playerRoutes = require('./routes/player');
-const matchRoutes = require('./routes/match');
-const statsRoutes = require('./routes/stats');
+const authRoutes = require('./routes/authRoutes');
+const tournamentRoutes = require('./routes/tournamentRoutes');
+const teamRoutes = require('./routes/teamRoutes');
+const playerRoutes = require('./routes/playerRoutes');
+const matchRoutes = require('./routes/matchRoutes');
+const statsRoutes = require('./routes/statsRoutes');
 
 // Database connection
 const { initDB } = require('./config/db');
@@ -22,15 +22,14 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Get current directory
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const path = require('path');
+const __dirname = path.resolve();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use(cookieParser());
 // Initialize database
 initDB();
 
