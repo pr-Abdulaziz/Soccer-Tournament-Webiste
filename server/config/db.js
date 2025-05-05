@@ -1,14 +1,10 @@
-const mongoose = require("mongoose");
+const mysql = require("mysql");
+require('dotenv').config();   // loads .env automatically
 
-const connectMongoDB = async () => {
-  const DB = process.env.DATABASE.replace(
-              "<password>", process.env.DATABASE_PASSWORD);
 
-  await mongoose.connect(DB, {
-    // useNewUrlParser: true,
-    // useUnifiedTopology: true,
-  });
-  console.log("MongoDB connection successful");
-};
-
-module.exports = connectMongoDB;
+export const db = mysql.createConnection({
+  host:     process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  username: process.env.DB_USER,
+  password: process.env.DB_PASS,
+});
