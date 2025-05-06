@@ -1,9 +1,9 @@
 {
   "development": {
-    "username": "root",
-    "password": "س202283240",
-    "database": "Soccer@KFUPM",
-    "host": "127.0.0.1",
+    "username": "",
+    "password": "",
+    "database": "",
+    "host": "",
     "dialect": "mysql"
   },
   "test": {

@@ -1,7 +1,6 @@
+const dotenv = require('dotenv');
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
-const { fileURLToPath } = require('url');
 const cookieParser = require("cookie-parser");
 
 // Routes
@@ -21,9 +20,6 @@ dotenv.config();
 // Create Express app
 const app = express();
 const PORT = process.env.PORT || 5000;
-
-const path = require('path');
-const __dirname = path.resolve();
 
 // Middleware
 app.use(cors());
