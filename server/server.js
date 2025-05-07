@@ -11,6 +11,7 @@ const playerRoutes = require('./routes/playerRoutes');
 const matchRoutes = require('./routes/matchRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 
+
 // Database connection
 const { initDB } = require('./config/db');
 
@@ -19,7 +20,7 @@ dotenv.config();
 
 // Create Express app
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = parseInt(process.env.PORT, 10) || 5000;
 
 // Middleware
 app.use(cors());
@@ -28,6 +29,15 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 // Initialize database
 initDB();
+
+// Allow React dev server origin & credentials if you ever use cookies
+app.use(
+  cors({
+    origin:  'http://localhost:3000',
+    methods: ['GET','POST','PUT','DELETE'],
+    credentials: true
+  })
+);
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -38,3 +48,7 @@ app.use('/api/matches', matchRoutes);
 app.use('/api/stats', statsRoutes);
 
 
+// start your server on the *HTTP* port, not the MySQL port:
+app.listen(PORT, () => {
+  console.log(`🚀 Server listening on http://localhost:${PORT}`);
+});

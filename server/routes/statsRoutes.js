@@ -1,168 +1,160 @@
+// server/routes/statsRoutes.js
 const express = require('express');
-const pool = require('../config/db');
-
-
+const { pool } = require('../config/db');
 const router = express.Router();
 
-// @route   GET /api/stats/top-scorers
-// @desc    Get top goal scorers across all tournaments
-// @access  Public
+// --- 1️⃣ Top scorers across all tournaments ---
+// GET /api/stats/top-scorers
 router.get('/top-scorers', async (req, res) => {
   try {
-    const [players] = await pool.query(`
-      SELECT p.id, p.name, p.jersey_number, p.position, p.goals, 
-        t.name as team_name, tournament.name as tournament_name
-      FROM players p
-      JOIN teams t ON p.team_id = t.id
-      JOIN tournaments tournament ON t.tournament_id = tournament.id
-      WHERE p.goals > 0
-      ORDER BY p.goals DESC
+    const [rows] = await pool.query(`
+      SELECT 
+        gd.player_id                       AS id,
+        per.name                           AS player_name,
+        pl.jersey_no                       AS jersey_number,
+        pp.position_desc                   AS position,
+        t.team_name                        AS team_name,
+        COUNT(*)                           AS goals
+      FROM goal_details gd
+      JOIN player pl       ON gd.player_id = pl.player_id
+      JOIN person per      ON pl.player_id = per.kfupm_id
+      JOIN playing_position pp ON pl.position_to_play = pp.position_id
+      JOIN team t          ON gd.team_id = t.team_id
+      GROUP BY gd.player_id, per.name, pl.jersey_no, pp.position_desc, t.team_name
+      ORDER BY goals DESC
       LIMIT 10
     `);
-    
-    res.status(200).json({
-      success: true,
-      count: players.length,
-      data: players
-    });
-  } catch (error) {
-    console.error('Get top scorers error:', error);
+    res.json({ success: true, count: rows.length, data: rows });
+  } catch (err) {
+    console.error('Get top scorers error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// @route   GET /api/stats/red-cards
-// @desc    Get players with red cards
-// @access  Public
+// --- 2️⃣ Players with red cards ---
+// GET /api/stats/red-cards
 router.get('/red-cards', async (req, res) => {
   try {
-    const tournamentId = req.query.tournament_id;
-    
-    let query = `
-      SELECT p.id, p.name, p.jersey_number, p.position, p.red_cards, 
-        t.name as team_name, tournament.name as tournament_name
-      FROM players p
-      JOIN teams t ON p.team_id = t.id
-      JOIN tournaments tournament ON t.tournament_id = tournament.id
-      WHERE p.red_cards > 0
-    `;
-    
-    const params = [];
-    
-    if (tournamentId) {
-      query += ' AND tournament.id = ?';
-      params.push(tournamentId);
-    }
-    
-    query += ' ORDER BY p.red_cards DESC, t.name ASC';
-    
-    const [players] = await pool.query(query, params);
-    
-    res.status(200).json({
-      success: true,
-      count: players.length,
-      data: players
-    });
-  } catch (error) {
-    console.error('Get red cards error:', error);
+    const [rows] = await pool.query(`
+      SELECT 
+        pb.player_id         AS id,
+        per.name             AS player_name,
+        t.team_name          AS team_name,
+        COUNT(*)             AS red_cards
+      FROM player_booked pb
+      JOIN person per       ON pb.player_id = per.kfupm_id
+      JOIN team t           ON pb.team_id = t.team_id
+      WHERE pb.sent_off = 'Y'
+      GROUP BY pb.player_id, per.name, t.team_name
+      ORDER BY red_cards DESC
+    `);
+    res.json({ success: true, count: rows.length, data: rows });
+  } catch (err) {
+    console.error('Get red cards error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// @route   GET /api/stats/tournament/:id
-// @desc    Get tournament statistics
-// @access  Public
+// --- 3️⃣ Tournament-specific stats ---
+// GET /api/stats/tournament/:id
 router.get('/tournament/:id', async (req, res) => {
+  const trId = req.params.id;
   try {
     // Validate tournament exists
-    const [tournaments] = await pool.query('SELECT * FROM tournaments WHERE id = ?', [req.params.id]);
-    
-    if (tournaments.length === 0) {
+    const [tourn] = await pool.query(
+      'SELECT tr_id AS id, tr_name AS name FROM tournament WHERE tr_id = ?',
+      [trId]
+    );
+    if (!tourn.length) {
       return res.status(404).json({ success: false, message: 'Tournament not found' });
     }
-    
-    // Get team standings
-    const [teams] = await pool.query(`
-      SELECT t.id, t.name, t.points,
-        COUNT(DISTINCT m.id) as matches_played,
-        SUM(CASE 
-          WHEN (m.home_team_id = t.id AND m.home_score > m.away_score) OR 
-               (m.away_team_id = t.id AND m.away_score > m.home_score) 
-          THEN 1 ELSE 0 
-        END) as wins,
-        SUM(CASE 
-          WHEN (m.home_score = m.away_score AND m.status = 'completed') 
-          THEN 1 ELSE 0 
-        END) as draws,
-        SUM(CASE 
-          WHEN (m.home_team_id = t.id AND m.home_score < m.away_score) OR 
-               (m.away_team_id = t.id AND m.away_score < m.home_score) 
-          THEN 1 ELSE 0 
-        END) as losses,
-        SUM(CASE 
-          WHEN m.home_team_id = t.id THEN m.home_score 
-          WHEN m.away_team_id = t.id THEN m.away_score 
-          ELSE 0 
-        END) as goals_for,
-        SUM(CASE 
-          WHEN m.home_team_id = t.id THEN m.away_score 
-          WHEN m.away_team_id = t.id THEN m.home_score 
-          ELSE 0 
-        END) as goals_against
-      FROM teams t
-      LEFT JOIN matches m ON (t.id = m.home_team_id OR t.id = m.away_team_id) 
-                          AND m.status = 'completed'
-      WHERE t.tournament_id = ?
-      GROUP BY t.id
-      ORDER BY t.points DESC, (goals_for - goals_against) DESC, goals_for DESC
-    `, [req.params.id]);
-    
-    // Get top scorers in this tournament
+
+    // Standings from tournament_team
+    const [standings] = await pool.query(`
+      SELECT
+        tt.team_id          AS id,
+        t.team_name         AS name,
+        tt.points,
+        tt.won,
+        tt.draw,
+        tt.lost,
+        tt.goal_for         AS goals_for,
+        tt.goal_against     AS goals_against,
+        tt.goal_diff
+      FROM tournament_team tt
+      JOIN team t ON tt.team_id = t.team_id
+      WHERE tt.tr_id = ?
+      ORDER BY tt.points DESC, tt.goal_diff DESC, tt.goal_for DESC
+    `, [trId]);
+
+    // Top scorers in this tournament
     const [topScorers] = await pool.query(`
-      SELECT p.id, p.name, p.jersey_number, p.goals, t.name as team_name
-      FROM players p
-      JOIN teams t ON p.team_id = t.id
-      WHERE t.tournament_id = ? AND p.goals > 0
-      ORDER BY p.goals DESC
+      SELECT
+        gd.player_id        AS id,
+        per.name            AS player_name,
+        t.team_name         AS team_name,
+        COUNT(*)            AS goals
+      FROM goal_details gd
+      JOIN tournament_team tt 
+        ON gd.team_id = tt.team_id AND tt.tr_id = ?
+      JOIN person per      ON gd.player_id = per.kfupm_id
+      JOIN team t          ON gd.team_id = t.team_id
+      GROUP BY gd.player_id, per.name, t.team_name
+      ORDER BY goals DESC
       LIMIT 5
-    `, [req.params.id]);
-    
-    // Get most recent matches
+    `, [trId]);
+
+    // 5 most recent matches (any status)
     const [recentMatches] = await pool.query(`
-      SELECT m.id, m.match_date, m.home_score, m.away_score, m.status,
-        home.name as home_team_name, away.name as away_team_name
-      FROM matches m
-      JOIN teams home ON m.home_team_id = home.id
-      JOIN teams away ON m.away_team_id = away.id
-      WHERE m.tournament_id = ?
-      ORDER BY m.match_date DESC
+      SELECT
+        mp.match_no         AS id,
+        mp.play_date        AS date,
+        home.team_name      AS home_team,
+        away.team_name      AS away_team,
+        mp.goal_score       AS score,
+        mp.results          AS result
+      FROM match_played mp
+      JOIN tournament_team tt1 
+        ON mp.team_id1 = tt1.team_id AND tt1.tr_id = ?
+      JOIN tournament_team tt2 
+        ON mp.team_id2 = tt2.team_id AND tt2.tr_id = ?
+      JOIN team home       ON mp.team_id1 = home.team_id
+      JOIN team away       ON mp.team_id2 = away.team_id
+      ORDER BY mp.play_date DESC
       LIMIT 5
-    `, [req.params.id]);
-    
-    // Get upcoming matches
+    `, [trId, trId]);
+
+    // 5 upcoming matches
     const [upcomingMatches] = await pool.query(`
-      SELECT m.id, m.match_date, m.location, m.status,
-        home.name as home_team_name, away.name as away_team_name
-      FROM matches m
-      JOIN teams home ON m.home_team_id = home.id
-      JOIN teams away ON m.away_team_id = away.id
-      WHERE m.tournament_id = ? AND m.status = 'scheduled' AND m.match_date > NOW()
-      ORDER BY m.match_date ASC
+      SELECT
+        mp.match_no         AS id,
+        mp.play_date        AS date,
+        home.team_name      AS home_team,
+        away.team_name      AS away_team
+      FROM match_played mp
+      JOIN tournament_team tt1 
+        ON mp.team_id1 = tt1.team_id AND tt1.tr_id = ?
+      JOIN tournament_team tt2 
+        ON mp.team_id2 = tt2.team_id AND tt2.tr_id = ?
+      JOIN team home       ON mp.team_id1 = home.team_id
+      JOIN team away       ON mp.team_id2 = away.team_id
+      WHERE mp.play_date > NOW()
+      ORDER BY mp.play_date ASC
       LIMIT 5
-    `, [req.params.id]);
-    
-    res.status(200).json({
+    `, [trId, trId]);
+
+    res.json({
       success: true,
       data: {
-        tournament: tournaments[0],
-        standings: teams,
+        tournament: tourn[0],
+        standings,
         topScorers,
         recentMatches,
         upcomingMatches
       }
     });
-  } catch (error) {
-    console.error('Get tournament stats error:', error);
+  } catch (err) {
+    console.error('Get tournament stats error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

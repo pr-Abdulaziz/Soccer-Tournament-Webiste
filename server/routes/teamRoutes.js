@@ -1,272 +1,197 @@
 const express = require('express');
-const pool = require('../config/db');
+const { pool } = require('../config/db');
 const { auth, adminOnly } = require('../middleware/auth');
 
 const router = express.Router();
 
-// @route   GET /api/teams
-// @desc    Get all teams
-// @access  Public
+/**
+ * GET /api/teams
+ * List all teams with their current tournament assignment (if any)
+ */
 router.get('/', async (req, res) => {
   try {
-    const [teams] = await pool.query(`
-      SELECT t.*, tournament.name as tournament_name, 
-        captain.name as captain_name, captain.jersey_number as captain_jersey
-      FROM teams t
-      LEFT JOIN tournaments tournament ON t.tournament_id = tournament.id
-      LEFT JOIN players captain ON t.captain_id = captain.id
-      ORDER BY t.name ASC
+    const [rows] = await pool.query(`
+      SELECT
+        t.team_id          AS id,
+        t.team_name        AS name,
+        tt.tr_id           AS tournament_id,
+        tr.tr_name         AS tournament_name,
+        tt.team_group      AS \`group\`,
+        tt.points
+      FROM team t
+      LEFT JOIN tournament_team tt
+        ON t.team_id = tt.team_id
+      LEFT JOIN tournament tr
+        ON tt.tr_id = tr.tr_id
+      ORDER BY t.team_name ASC
     `);
-    
-    res.status(200).json({
-      success: true,
-      count: teams.length,
-      data: teams
-    });
-  } catch (error) {
-    console.error('Get teams error:', error);
+    res.json({ success: true, count: rows.length, data: rows });
+  } catch (err) {
+    console.error('Get teams error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// @route   GET /api/teams/:id
-// @desc    Get team by ID with all members
-// @access  Public
+/**
+ * GET /api/teams/:id
+ * Get one team’s info, its tournament assignment, and its roster for that tournament
+ */
 router.get('/:id', async (req, res) => {
   try {
-    // Get team details
-    const [teams] = await pool.query(`
-      SELECT t.*, tournament.name as tournament_name, 
-        captain.name as captain_name, captain.jersey_number as captain_jersey
-      FROM teams t
-      LEFT JOIN tournaments tournament ON t.tournament_id = tournament.id
-      LEFT JOIN players captain ON t.captain_id = captain.id
-      WHERE t.id = ?
-    `, [req.params.id]);
-    
-    if (teams.length === 0) {
+    const teamId = req.params.id;
+
+    // 1) basic team info
+    const [teamRows] = await pool.query(`
+      SELECT team_id AS id, team_name AS name
+      FROM team
+      WHERE team_id = ?
+    `, [teamId]);
+    if (!teamRows.length) {
       return res.status(404).json({ success: false, message: 'Team not found' });
     }
-    
-    const team = teams[0];
-    
-    // Get all approved players in the team
-    const [players] = await pool.query(`
-      SELECT id, name, jersey_number, position, is_captain, goals, red_cards, yellow_cards
-      FROM players
-      WHERE team_id = ? AND is_approved = true
-      ORDER BY jersey_number ASC
-    `, [req.params.id]);
-    
-    // Get pending players
-    const [pendingPlayers] = await pool.query(`
-      SELECT id, name, jersey_number, position
-      FROM players
-      WHERE team_id = ? AND is_approved = false
-      ORDER BY created_at DESC
-    `, [req.params.id]);
-    
-    team.players = players;
-    team.pendingPlayers = pendingPlayers;
-    
-    res.status(200).json({
-      success: true,
-      data: team
-    });
-  } catch (error) {
-    console.error('Get team error:', error);
+    const team = teamRows[0];
+
+    // 2) tournament assignment & stats
+    const [ttRows] = await pool.query(`
+      SELECT
+        tt.tr_id            AS tournament_id,
+        tr.tr_name          AS tournament_name,
+        tt.team_group       AS \`group\`,
+        tt.match_played,
+        tt.won,
+        tt.draw,
+        tt.lost,
+        tt.goal_for,
+        tt.goal_against,
+        tt.goal_diff,
+        tt.points,
+        tt.group_position
+      FROM tournament_team tt
+      JOIN tournament tr
+        ON tt.tr_id = tr.tr_id
+      WHERE tt.team_id = ?
+    `, [teamId]);
+    team.tournament = ttRows[0] || null;
+
+    // 3) roster for that tournament (if any)
+    if (team.tournament) {
+      const trId = team.tournament.tournament_id;
+      const [players] = await pool.query(`
+        SELECT
+          p.player_id           AS id,
+          pr.name               AS name,
+          p.jersey_no           AS jersey_number,
+          p.position_to_play    AS position
+        FROM team_player tp
+        JOIN player p
+          ON tp.player_id = p.player_id
+        JOIN person pr
+          ON p.player_id = pr.kfupm__id
+        WHERE tp.team_id = ? AND tp.tr_id = ?
+        ORDER BY p.jersey_no ASC
+      `, [teamId, trId]);
+      team.roster = players;
+    } else {
+      team.roster = [];
+    }
+
+    res.json({ success: true, data: team });
+  } catch (err) {
+    console.error('Get team error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// @route   POST /api/teams
-// @desc    Create a team
-// @access  Private (Admin only)
+/**
+ * POST /api/teams
+ * Create a new team and assign it to a tournament
+ * Body: { name, tr_id, team_group? }
+ */
 router.post('/', auth, adminOnly, async (req, res) => {
   try {
-    const { name, logo_url, tournament_id, manager_name, coach_name } = req.body;
-    
-    // Validate required fields
-    if (!name || !tournament_id) {
-      return res.status(400).json({ success: false, message: 'Please provide team name and tournament ID' });
+    const { name, tr_id, team_group } = req.body;
+    if (!name || !tr_id) {
+      return res.status(400).json({ success: false, message: 'Please provide team name and tr_id' });
     }
-    
-    // Check if tournament exists
-    const [tournaments] = await pool.query(
-      'SELECT * FROM tournaments WHERE id = ?',
-      [tournament_id]
+
+    // 1) insert into team
+    const [ins] = await pool.query(
+      `INSERT INTO team (team_name) VALUES (?)`,
+      [name]
     );
-    
-    if (tournaments.length === 0) {
-      return res.status(404).json({ success: false, message: 'Tournament not found' });
-    }
-    
-    // Check if team name already exists in this tournament
-    const [existingTeams] = await pool.query(
-      'SELECT * FROM teams WHERE name = ? AND tournament_id = ?',
-      [name, tournament_id]
-    );
-    
-    if (existingTeams.length > 0) {
-      return res.status(400).json({ success: false, message: 'Team with this name already exists in the tournament' });
-    }
-    
-    // Create team
-    const [result] = await pool.query(
-      'INSERT INTO teams (name, logo_url, tournament_id, manager_name, coach_name) VALUES (?, ?, ?, ?, ?)',
-      [name, logo_url, tournament_id, manager_name, coach_name]
-    );
-    
-    // Get created team
-    const [team] = await pool.query(`
-      SELECT t.*, tournament.name as tournament_name
-      FROM teams t
-      JOIN tournaments tournament ON t.tournament_id = tournament.id
-      WHERE t.id = ?
-    `, [result.insertId]);
-    
-    res.status(201).json({
-      success: true,
-      data: team[0]
-    });
-  } catch (error) {
-    console.error('Create team error:', error);
+    const teamId = ins.insertId;
+
+    // 2) assign to tournament with zeros
+    await pool.query(`
+      INSERT INTO tournament_team
+        (team_id, tr_id, team_group, match_played, won, draw, lost, goal_for, goal_against, goal_diff, points, group_position)
+      VALUES (?, ?, ?, 0,0,0,0,0,0,0,0,0)
+    `, [teamId, tr_id, team_group || null]);
+
+    // 3) return created team
+    const [rows] = await pool.query(`
+      SELECT team_id AS id, team_name AS name
+      FROM team
+      WHERE team_id = ?
+    `, [teamId]);
+
+    res.status(201).json({ success: true, data: rows[0] });
+  } catch (err) {
+    console.error('Create team error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// @route   PUT /api/teams/:id/captain
-// @desc    Set team captain
-// @access  Private (Admin only)
-router.put('/:id/captain', auth, adminOnly, async (req, res) => {
-  try {
-    const { player_id } = req.body;
-    
-    if (!player_id) {
-      return res.status(400).json({ success: false, message: 'Please provide player ID' });
-    }
-    
-    // Check if team exists
-    const [teams] = await pool.query('SELECT * FROM teams WHERE id = ?', [req.params.id]);
-    
-    if (teams.length === 0) {
-      return res.status(404).json({ success: false, message: 'Team not found' });
-    }
-    
-    // Check if player exists and belongs to this team
-    const [players] = await pool.query(
-      'SELECT * FROM players WHERE id = ? AND team_id = ?',
-      [player_id, req.params.id]
-    );
-    
-    if (players.length === 0) {
-      return res.status(404).json({ success: false, message: 'Player not found in this team' });
-    }
-    
-    // Reset is_captain for all players in the team
-    await pool.query(
-      'UPDATE players SET is_captain = false WHERE team_id = ?',
-      [req.params.id]
-    );
-    
-    // Set new captain
-    await pool.query(
-      'UPDATE players SET is_captain = true WHERE id = ?',
-      [player_id]
-    );
-    
-    // Update captain_id in team
-    await pool.query(
-      'UPDATE teams SET captain_id = ? WHERE id = ?',
-      [player_id, req.params.id]
-    );
-    
-    // Get updated team with captain
-    const [updatedTeam] = await pool.query(`
-      SELECT t.*, p.name as captain_name, p.jersey_number as captain_jersey
-      FROM teams t
-      LEFT JOIN players p ON t.captain_id = p.id
-      WHERE t.id = ?
-    `, [req.params.id]);
-    
-    res.status(200).json({
-      success: true,
-      data: updatedTeam[0],
-      message: 'Team captain updated successfully'
-    });
-  } catch (error) {
-    console.error('Set captain error:', error);
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
-});
-
-// @route   PUT /api/teams/:id
-// @desc    Update team details
-// @access  Private (Admin only)
+/**
+ * PUT /api/teams/:id
+ * Update a team’s name
+ * Body: { name }
+ */
 router.put('/:id', auth, adminOnly, async (req, res) => {
   try {
-    const { name, logo_url, manager_name, coach_name } = req.body;
-    
-    // Check if team exists
-    const [teams] = await pool.query('SELECT * FROM teams WHERE id = ?', [req.params.id]);
-    
-    if (teams.length === 0) {
+    const teamId = req.params.id;
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'Please provide a new name' });
+    }
+    // ensure exists
+    const [exist] = await pool.query(
+      `SELECT team_id FROM team WHERE team_id = ?`, [teamId]
+    );
+    if (!exist.length) {
       return res.status(404).json({ success: false, message: 'Team not found' });
     }
-    
-    // Update team
+    // update
     await pool.query(
-      'UPDATE teams SET name = ?, logo_url = ?, manager_name = ?, coach_name = ? WHERE id = ?',
-      [
-        name || teams[0].name,
-        logo_url !== undefined ? logo_url : teams[0].logo_url,
-        manager_name !== undefined ? manager_name : teams[0].manager_name,
-        coach_name !== undefined ? coach_name : teams[0].coach_name,
-        req.params.id
-      ]
+      `UPDATE team SET team_name = ? WHERE team_id = ?`,
+      [name, teamId]
     );
-    
-    // Get updated team
-    const [updatedTeam] = await pool.query(`
-      SELECT t.*, tournament.name as tournament_name, 
-        captain.name as captain_name, captain.jersey_number as captain_jersey
-      FROM teams t
-      LEFT JOIN tournaments tournament ON t.tournament_id = tournament.id
-      LEFT JOIN players captain ON t.captain_id = captain.id
-      WHERE t.id = ?
-    `, [req.params.id]);
-    
-    res.status(200).json({
-      success: true,
-      data: updatedTeam[0]
-    });
-  } catch (error) {
-    console.error('Update team error:', error);
+    res.json({ success: true, message: 'Team updated' });
+  } catch (err) {
+    console.error('Update team error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
-// @route   DELETE /api/teams/:id
-// @desc    Delete a team
-// @access  Private (Admin only)
+/**
+ * DELETE /api/teams/:id
+ * Delete a team (cascades via FK ON DELETE CASCADE)
+ */
 router.delete('/:id', auth, adminOnly, async (req, res) => {
   try {
-    // Check if team exists
-    const [teams] = await pool.query('SELECT * FROM teams WHERE id = ?', [req.params.id]);
-    
-    if (teams.length === 0) {
+    const teamId = req.params.id;
+    // ensure exists
+    const [exist] = await pool.query(
+      `SELECT team_id FROM team WHERE team_id = ?`, [teamId]
+    );
+    if (!exist.length) {
       return res.status(404).json({ success: false, message: 'Team not found' });
     }
-    
-    // Delete team (cascades to players)
-    await pool.query('DELETE FROM teams WHERE id = ?', [req.params.id]);
-    
-    res.status(200).json({
-      success: true,
-      message: 'Team deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete team error:', error);
+    // delete
+    await pool.query(`DELETE FROM team WHERE team_id = ?`, [teamId]);
+    res.json({ success: true, message: 'Team deleted' });
+  } catch (err) {
+    console.error('Delete team error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });

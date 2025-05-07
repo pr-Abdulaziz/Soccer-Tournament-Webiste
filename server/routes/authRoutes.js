@@ -1,120 +1,140 @@
-const express = require('express');
-const bcrypt  = require('bcryptjs');
-const jwt     = require('jsonwebtoken');
-const pool    = require('../config/db');
-const { auth } = require('../middleware/auth');
-const dotenv  = require('dotenv');
-dotenv.config();
-const router = express.Router();
+// routes/authRoutes.js
+const express   = require('express');
+const bcrypt    = require('bcryptjs');
+const jwt       = require('jsonwebtoken');
+const { pool }  = require('../config/db');
+const { auth }  = require('../middleware/auth');
+const router    = express.Router();
 
+// POST /api/auth/register
 router.post('/register', async (req, res) => {
   try {
     const { username, email, password, role = 'guest' } = req.body;
+    if (!username || !email || !password)
+      return res
+        .status(400)
+        .json({ success: false, message: 'Please enter all fields' });
 
-    /* ---------- 1.  Basic validation ----------------------------- */
-    if (!username || !email || !password) {
-      return res.status(400).json({ success: false, message: 'Please enter all fields' });
-    }
-
+    // Basic email & role checks
     const emailRE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRE.test(email)) {
-      return res.status(400).json({ success: false, message: 'Please enter a valid email' });
-    }
-
-    if (!['admin', 'guest'].includes(role)) {
+    if (!emailRE.test(email))
+      return res.status(400).json({ success: false, message: 'Invalid email' });
+    if (!['admin','guest'].includes(role))
       return res.status(400).json({ success: false, message: 'Invalid role' });
-    }
 
-    /* ---------- 2.  “Only‑one‑admin” guard ----------------------- */
+    // Only one admin allowed
     if (role === 'admin') {
-      const [admins] = await pool.query('SELECT id FROM users WHERE role = "admin" LIMIT 1');
-      if (admins.length) {
+      const [admins] = await pool.query(
+        `SELECT id FROM users WHERE role='admin' LIMIT 1`
+      );
+      if (admins.length)
         return res.status(403).json({
           success: false,
-          message: 'Admin account already exists – contact the existing administrator.',
+          message:
+            'Admin account already exists – contact the existing administrator.'
         });
-      }
     }
 
-    /* ---------- 3.  Duplicate username / email? ------------------ */
+    // Duplicate?
     const [dupes] = await pool.query(
-      'SELECT id FROM users WHERE email = ? OR username = ?',
+      `SELECT id FROM users WHERE email = ? OR username = ?`,
       [email, username]
     );
-    if (dupes.length) {
-      return res.status(409).json({ success: false, message: 'User already exists' });
-    }
+    if (dupes.length)
+      return res
+        .status(409)
+        .json({ success: false, message: 'User already exists' });
 
-    /* ---------- 4.  Hash password & insert ----------------------- */
+    // Hash + insert
     const hash = await bcrypt.hash(password, 10);
-
-    const [insert] = await pool.query(
-      'INSERT INTO users (username, email, password, role) VALUES (?,?,?,?)',
+    const [insertResult] = await pool.query(
+      `INSERT INTO users
+         (username, email, password, role)
+       VALUES (?,?,?,?)`,
       [username, email, hash, role]
     );
 
-    /* ---------- 5.  Fetch inserted row (minus pwd) --------------- */
-    const [rows] = await pool.query(
-      'SELECT id, username, email, role, created_at FROM users WHERE id = ?',
-      [insert.insertId]
+    // Fetch back user (minus pwd) & sign JWT
+    const [[user]] = await pool.query(
+      `SELECT id, username, email, role, created_at
+         FROM users
+        WHERE id = ?`,
+      [insertResult.insertId]
     );
 
-    /* ---------- 6.  Sign JWT & respond --------------------------- */
     const token = jwt.sign(
-      { id: rows[0].id, username, email, role },
+      { id: user.id, username, email, role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
 
-    return res.status(201).json({
-      success: true,
-      token,
-      user: rows[0],
-    });
+    return res.status(201).json({ success: true, token, user });
   } catch (err) {
     console.error('Registration error:', err);
-    return res.status(500).json({ success: false, message: 'Server error', err });
+    return res
+      .status(500)
+      .json({ success: false, message: 'Server error' });
   }
 });
 
-router.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ success:false, message:'Please enter all fields' });
+// POST /api/auth/login
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res
+        .status(400)
+        .json({ success: false, message: 'Please enter all fields' });
 
-  const q = 'SELECT * FROM users WHERE email = ?';
-  pool.query(q, [email], (err, rows) => {
-    if (err)  return res.status(500).json({ success:false, message:'DB error', err });
-    if (!rows.length)
-      return res.status(400).json({ success:false, message:'Invalid credentials' });
+    const [[user]] = await pool.query(
+      `SELECT * FROM users WHERE email = ?`,
+      [email]
+    );
+    if (!user)
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid credentials' });
 
-    const user = rows[0];
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch)
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid credentials' });
 
-    bcrypt.compare(password, user.password, (err, isMatch) => {
-      if (err || !isMatch)
-        return res.status(400).json({ success:false, message:'Invalid credentials' });
-
-      const token = jwt.sign(
-        { id:user.id, username:user.username, email:user.email, role:user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN }
-      );
-
-      delete user.password;
-      return res.status(200).json({ success:true, token, user });
-    });
-  });
+    delete user.password;
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+    return res.status(200).json({ success: true, token, user });
+  } catch (err) {
+    console.error('Login error:', err);
+    return res
+      .status(500)
+      .json({ success: false, message: 'Server error' });
+  }
 });
 
-router.get('/user', auth, (req, res) => {
-  const q = 'SELECT id,username,email,role,created_at FROM users WHERE id = ?';
-  pool.query(q, [req.user.id], (err, rows) => {
-    if (err)   return res.status(500).json({ success:false, message:'DB error', err });
-    if (!rows.length)
-      return res.status(404).json({ success:false, message:'User not found' });
-
-    return res.status(200).json({ success:true, user: rows[0] });
-  });
+// GET /api/auth/user
+router.get('/user', auth, async (req, res) => {
+  try {
+    const [[user]] = await pool.query(
+      `SELECT id, username, email, role, created_at
+         FROM users WHERE id = ?`,
+      [req.user.id]
+    );
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: 'User not found' });
+    res.status(200).json({ success: true, user });
+  } catch (err) {
+    console.error('Get user error:', err);
+    res
+      .status(500)
+      .json({ success: false, message: 'Server error' });
+  }
 });
 
 module.exports = router;
