@@ -5,11 +5,7 @@ const cookieParser = require("cookie-parser");
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
-const tournamentRoutes = require('./routes/tournamentRoutes');
-const teamRoutes = require('./routes/teamRoutes');
-const playerRoutes = require('./routes/playerRoutes');
-const matchRoutes = require('./routes/matchRoutes');
-const statsRoutes = require('./routes/statsRoutes');
+const guestRoutes = require('./routes/guestRoutes');
 
 
 // Database connection
@@ -41,12 +37,7 @@ app.use(
 
 // API Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/tournaments', tournamentRoutes);
-app.use('/api/teams', teamRoutes);
-app.use('/api/players', playerRoutes);
-app.use('/api/matches', matchRoutes);
-app.use('/api/stats', statsRoutes);
-
+app.use('/api/guest', guestRoutes);
 
 // start your server on the *HTTP* port, not the MySQL port:
 app.listen(PORT, () => {
