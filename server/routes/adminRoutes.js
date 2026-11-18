@@ -1,16 +1,14 @@
 const express = require('express');
 const { pool } = require('../config/db');
+const { auth, adminOnly } = require('../middleware/auth');
 const router = express.Router();
 
-// Admin authentication middleware
-const adminAuth = (req, res, next) => {
-  // JWT/session validation for admin role would go here
-  // For now, just passing through
-  next();
-};
+// Every admin endpoint requires a valid JWT that belongs to an admin user.
+// Applied router-wide so a new route can't accidentally be left unprotected.
+router.use(auth, adminOnly);
 
 // 1. Add new tournament
-router.post('/dashboard/tournaments', adminAuth, async (req, res) => {
+router.post('/dashboard/tournaments', async (req, res) => {
   const { tr_id, tr_name, start_date, end_date } = req.body;
 
   // Validate required fields
@@ -58,7 +56,7 @@ router.post('/dashboard/tournaments', adminAuth, async (req, res) => {
 });
 
 // 2. Add team to tournament
-router.post('/dashboard/tournaments/:trId/teams', adminAuth, async (req, res) => {
+router.post('/dashboard/tournaments/:trId/teams', async (req, res) => {
   const { trId } = req.params;
   const { team_id, team_group } = req.body;
   const group_position = req.body.group_position || null;
@@ -157,7 +155,7 @@ router.post('/dashboard/tournaments/:trId/teams', adminAuth, async (req, res) =>
 });
 
 // 3. Select match captain for a team
-router.post('/dashboard/matches/:matchId/captain', adminAuth, async (req, res) => {
+router.post('/dashboard/matches/:matchId/captain', async (req, res) => {
   const { matchId } = req.params;
   const { team_id, player_id } = req.body;
 
@@ -242,7 +240,7 @@ router.post('/dashboard/matches/:matchId/captain', adminAuth, async (req, res) =
 });
 
 // 4. Approve player to join team in a tournament
-router.post('/dashboard/approvals', adminAuth, async (req, res) => {
+router.post('/dashboard/approvals', async (req, res) => {
   const { tr_id, team_id, player_id } = req.body;
   
   // Validate required fields
@@ -343,7 +341,7 @@ router.post('/dashboard/approvals', adminAuth, async (req, res) => {
 });
 
 // 5. Delete tournament
-router.delete('/dashboard/tournaments/:trId', adminAuth, async (req, res) => {
+router.delete('/dashboard/tournaments/:trId', async (req, res) => {
   const { trId } = req.params;
 
   try {
@@ -427,7 +425,7 @@ router.delete('/dashboard/tournaments/:trId', adminAuth, async (req, res) => {
 // Supporting routes for the dashboard
 
 // Get all tournaments
-router.get('/dashboard/tournaments', adminAuth, async (req, res) => {
+router.get('/dashboard/tournaments', async (req, res) => {
   try {
     const [tournaments] = await pool.query('SELECT * FROM tournament ORDER BY start_date DESC');
     res.json({ 
@@ -446,7 +444,7 @@ router.get('/dashboard/tournaments', adminAuth, async (req, res) => {
 });
 
 // Get all teams
-router.get('/dashboard/teams', adminAuth, async (req, res) => {
+router.get('/dashboard/teams', async (req, res) => {
   try {
     const [teams] = await pool.query('SELECT * FROM team ORDER BY team_name');
     res.json({ 
@@ -465,7 +463,7 @@ router.get('/dashboard/teams', adminAuth, async (req, res) => {
 });
 
 // Get all players with their positions
-router.get('/dashboard/players', adminAuth, async (req, res) => {
+router.get('/dashboard/players', async (req, res) => {
   try {
     const [players] = await pool.query(
       `SELECT p.player_id, pr.name, p.jersey_no, p.position_to_play, 
@@ -491,7 +489,7 @@ router.get('/dashboard/players', adminAuth, async (req, res) => {
 });
 
 // Get all matches
-router.get('/dashboard/matches', adminAuth, async (req, res) => {
+router.get('/dashboard/matches', async (req, res) => {
   try {
     const [matches] = await pool.query(
       `SELECT m.match_no, m.play_stage, m.play_date, 

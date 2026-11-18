@@ -2,6 +2,13 @@ const nodemailer = require('nodemailer');
 const dotenv      = require('dotenv');
 dotenv.config();
 
+// Values from the database are inserted into HTML, so escape them first
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
 const transporter = nodemailer.createTransport({
   // If you use e.g. Gmail, set EMAIL_SERVICE=gmail in .env
   service: process.env.EMAIL_SERVICE,    // e.g. 'gmail'
@@ -24,20 +31,21 @@ async function sendMatchReminder(match, team, players) {
 
     const mailOptions = {
       from: process.env.EMAIL_USER,
-      to:   emails.join(','),
+      to:   process.env.EMAIL_USER,
+      bcc:  emails,                    // players don't see each other's addresses
       subject: `⚽ Match Reminder: ${team.name} – KFUPM Soccer Tournament`,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;
                     padding:20px;border:1px solid #e0e0e0;border-radius:5px;">
           <h2 style="color:#10b981;text-align:center;">⚽ Upcoming Match Reminder</h2>
-          <p>Dear <strong>${team.name}</strong> team member,</p>
+          <p>Dear <strong>${escapeHtml(team.name)}</strong> team member,</p>
           <p>This is a friendly reminder of your upcoming match:</p>
 
           <div style="background:#f9fafb;padding:15px;border-radius:5px;margin:15px 0;">
-            <p><strong>Tournament:</strong> ${match.tournament_name}</p>
-            <p><strong>Match:</strong> ${match.home_team_name} vs ${match.away_team_name}</p>
-            <p><strong>Date & Time:</strong> ${new Date(match.match_date).toLocaleString()}</p>
-            <p><strong>Location:</strong> ${match.location}</p>
+            <p><strong>Tournament:</strong> ${escapeHtml(match.tournament_name)}</p>
+            <p><strong>Match:</strong> ${escapeHtml(match.home_team_name)} vs ${escapeHtml(match.away_team_name)}</p>
+            <p><strong>Date & Time:</strong> ${escapeHtml(new Date(match.match_date).toLocaleString())}</p>
+            <p><strong>Location:</strong> ${escapeHtml(match.location)}</p>
           </div>
 
           <p>Please arrive at least <strong>30 minutes</strong> before kick‑off.</p>

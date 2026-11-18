@@ -9,15 +9,20 @@ const pool = mysql
     database: process.env.DB_NAME,
     port: process.env.DB_PORT || 3306,
     waitForConnections: true,
+    // Treat objects passed as query values as plain strings. Without this, a JSON
+    // body like {"email": {"email": 1}} is expanded into SQL (`email` = 1) and can
+    // change the meaning of a WHERE clause.
+    stringifyObjects: true
   })
   .promise();
 
 async function initDB() {
   try {
-    await pool.getConnection();
+    const conn = await pool.getConnection();
+    conn.release();
     console.log('✅ MySQL connected');
   } catch (err) {
-    console.error('❌ DB connection failed:', err);
+    console.error('❌ DB connection failed:', err.message);
     process.exit(1);
   }
 }
